@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Event Seating Chart (Live Sync)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+    h1 {
+      text-align: center;
+    }
+    .hall-container {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+      margin-bottom: 30px;
+      align-items: center;
+    }
+    .seat-row {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+      justify-content: center;
+      transform: perspective(1000px) rotateX(5deg);
+      flex-wrap: wrap;
+      max-width: 100%;
+    }
+    .row-label {
+      width: 60px;
+      font-weight: bold;
+      text-align: right;
+      padding-right: 10px;
+    }
+    .seat {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #ccc;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 12px;
+      user-select: none;
+    }
+    .seat.vip {
+      width: 70px;
+      height: 75px;
+      background-color: #ffd700;
+      font-weight: bold;
+    }
+    .seat.regular {
+      width: 50px;
+      height: 50px;
+      background-color: #f0f0f0;
+    }
+    .seat:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+    }
+    /* Status Colors */
+    .confirmed { background-color: #a0e0a0 !important; } /* Green */
+    .unconfirmed { background-color: #ff9999 !important; } /* Red */
+    .checkedin { background-color: #66b3ff !important; } /* Blue */
+
+    .controls { text-align: center; margin-bottom: 20px; }
+    .status-legend {
+      display: flex; gap: 15px; justify-content: center; margin-bottom: 10px;
+    }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+    .legend-color { width: 15px; height: 15px; border: 1px solid #999; }
+
+    .modal { display: none; position: fixed; z-index: 10; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); }
+    .modal-content {
+      background: #fff; margin: 10% auto; padding: 20px; width: 300px; border-radius: 8px;
+    }
+    .close { float: right; cursor: pointer; font-size: 20px; }
+    .button-group { display: flex; gap: 10px; margin-top: 10px; }
+    button { padding: 6px 12px; cursor: pointer; }
+    .delete-btn { background: #ff6666; color: white; }
+  </style>
+</head>
+<body>
+  <h1>Event Hall Seating (Live Sync)</h1>
+
+  <div class="controls">
+    <div class="status-legend">
+      <div class="legend-item"><div class="legend-color" style="background:#ffd700;"></div> VIP</div>
+      <div class="legend-item"><div class="legend-color" style="background:#f0f0f0;"></div> Regular</div>
+      <div class="legend-item"><div class="legend-color" style="background:#a0e0a0;"></div> Confirmed</div>
+      <div class="legend-item"><div class="legend-color" style="background:#ff9999;"></div> Unconfirmed</div>
+      <div class="legend-item"><div class="legend-color" style="background:#66b3ff;"></div> Checked-In</div>
+    </div>
+    <input type="file" id="csvFile" accept=".csv" />
+    <button onclick="importCSV()">Import CSV</button>
+    <button onclick="exportCSV()">Export CSV</button>
+    <div id="stats"></div>
+  </div>
+
+  <div class="hall-container">
+    <div class="seat-row" id="vipA"><div class="row-label">VIP A</div></div>
+    <div class="seat-row" id="vipB"><div class="row-label">VIP B</div></div>
+    <div class="seat-row" id="vipC"><div class="row-label">VIP C</div></div>
+    <div class="seat-row" id="rowA"><div class="row-label">A</div></div>
+    <div class="seat-row" id="rowB"><div class="row-label">B</div></div>
+    <div class="seat-row" id="rowC"><div class="row-label">C</div></div>
+  </div>
+
+  <!-- Modal -->
+  <div id="guestModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="modal.style.display='none'">&times;</span>
+      <h3 id="seatTitle">Seat</h3>
+      <label>Name: <input type="text" id="guestName"></label>
+      <label>Email: <input type="email" id="guestEmail"></label>
+      <label>Confirmed: <input type="checkbox" id="guestConfirmed"></label>
+      <label>Notes: <textarea id="guestNotes"></textarea></label>
+      <div class="button-group">
+        <button onclick="saveGuest()">Save</button>
+        <button class="delete-btn" onclick="clearGuest()">Clear</button>
+      </div>
+      <button onclick="toggleCheckIn()" style="margin-top:10px; background:#66b3ff;">Toggle Check-In</button>
+    </div>
+  </div>
+
+  <!-- Firebase -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDImXiWuVL1gQl1i_rqiTo-TkpF9XRO72c",
+      authDomain: "event-organizing-1ef59.firebaseapp.com",
+      projectId: "event-organizing-1ef59",
+      storageBucket: "event-organizing-1ef59.firebasestorage.app",
+      messagingSenderId: "849557618639",
+      appId: "1:849557618639:web:b3ddd5a3a3b3fa6b90dcba",
+      measurementId: "G-R6WSZTTNK3"
+    };
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let seatData = {}; // local cache
+    let currentSeat = null;
+
+    // Create seat layout
+    function createSeats() {
+      ["vipA","vipB","vipC","rowA","rowB","rowC"].forEach((id)=>{
+        const container=document.getElementById(id);
+        for(let i=1;i<=10;i++){ // example: 10 seats each row
+          const seatId=id.toUpperCase()+"-"+i;
+          const div=document.createElement("div");
+          div.className="seat "+(id.startsWith("vip")?"vip":"regular");
+          div.textContent=i;
+          div.onclick=()=>openModal(seatId);
+          container.appendChild(div);
+          seatData[seatId]={seatId,type:id.startsWith("vip")?"VIP":"Regular",row:id,number:i,guest:null,confirmed:false,checkedIn:false};
+        }
+      });
+    }
+
+    // Listen Firestore changes
+    function listenSeats(){
+      onSnapshot(collection(db,"seats"),(snapshot)=>{
+        snapshot.forEach(docSnap=>{
+          const s=docSnap.data();
+          seatData[s.seatId]=s;
+          updateSeatUI(s.seatId);
+        });
+        updateStats();
+      });
+    }
+
+    // Update seat color
+    function updateSeatUI(seatId){
+      const seat=document.querySelector(`[onclick*='${seatId}']`);
+      if(!seat) return;
+      seat.classList.remove("confirmed","unconfirmed","checkedin");
+      const s=seatData[seatId];
+      if(s.checkedIn) seat.classList.add("checkedin");
+      else if(s.guest){
+        if(s.confirmed) seat.classList.add("confirmed");
+        else seat.classList.add("unconfirmed");
+      }
+    }
+
+    // Modal
+    const modal=document.getElementById("guestModal");
+    window.openModal=(seatId)=>{
+      currentSeat=seatId;
+      document.getElementById("seatTitle").textContent=seatId;
+      const s=seatData[seatId];
+      document.getElementById("guestName").value=s.guest?s.guest.name:"";
+      document.getElementById("guestEmail").value=s.guest?s.guest.email:"";
+      document.getElementById("guestConfirmed").checked=s.confirmed||false;
+      document.getElementById("guestNotes").value=s.guest?s.guest.notes:"";
+      modal.style.display="block";
+    };
+
+    // Save guest
+    window.saveGuest=async()=>{
+      const name=document.getElementById("guestName").value;
+      const email=document.getElementById("guestEmail").value;
+      const conf=document.getElementById("guestConfirmed").checked;
+      const notes=document.getElementById("guestNotes").value;
+      let s=seatData[currentSeat];
+      if(name){
+        s.guest={name,email,notes};
+        s.confirmed=conf;
+      } else {
+        s.guest=null;
+        s.confirmed=false;
+      }
+      await setDoc(doc(db,"seats",currentSeat),s);
+      modal.style.display="none";
+    };
+
+    // Clear guest
+    window.clearGuest=async()=>{
+      let s=seatData[currentSeat];
+      s.guest=null; s.confirmed=false; s.checkedIn=false;
+      await setDoc(doc(db,"seats",currentSeat),s);
+      modal.style.display="none";
+    };
+
+    // Toggle check-in
+    window.toggleCheckIn=async()=>{
+      let s=seatData[currentSeat];
+      s.checkedIn=!s.checkedIn;
+      await setDoc(doc(db,"seats",currentSeat),s);
+      modal.style.display="none";
+    };
+
+    // Stats
+    function updateStats(){
+      let total=Object.keys(seatData).length;
+      let confirmed=Object.values(seatData).filter(s=>s.guest&&s.confirmed).length;
+      let unconf=Object.values(seatData).filter(s=>s.guest&&!s.confirmed).length;
+      let checked=Object.values(seatData).filter(s=>s.checkedIn).length;
+      document.getElementById("stats").textContent=`Total: ${total} | Confirmed: ${confirmed} | Unconfirmed: ${unconf} | Checked-In: ${checked}`;
+    }
+
+    // CSV import/export
+    window.importCSV=()=>{
+      const f=document.getElementById("csvFile").files[0]; if(!f)return;
+      const reader=new FileReader();
+      reader.onload=async(e)=>{
+        const lines=e.target.result.split("\n");
+        for(let line of lines){
+          const [seatId,name,email,conf]=line.split(",");
+          if(!seatId) continue;
+          let s=seatData[seatId];
+          if(!s) continue;
+          if(name){
+            s.guest={name,email,notes:""};
+            s.confirmed=(conf==="true");
+          }
+          await setDoc(doc(db,"seats",seatId),s);
+        }
+        alert("Imported to Firestore!");
+      };
+      reader.readAsText(f);
+    };
+
+    window.exportCSV=()=>{
+      let csv="seatId,name,email,confirmed\n";
+      for(let s of Object.values(seatData)){
+        csv+=`${s.seatId},${s.guest?s.guest.name:""},${s.guest?s.guest.email:""},${s.confirmed}\n`;
+      }
+      const blob=new Blob([csv],{type:"text/csv"});
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download="seats.csv";
+      a.click();
+    };
+
+    // Init
+    createSeats();
+    listenSeats();
+  </script>
+</body>
+</html>
